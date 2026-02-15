@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili 收藏夹按 UP 主数量自动整理
 // @namespace    https://github.com/
-// @version      1.5.0
+// @version      1.6.0
 // @description  输入多个收藏夹名称，按 UP 主出现次数降序将视频移动到新建收藏夹
 // @author       codex
 // @match        https://space.bilibili.com/*/favlist*
@@ -435,7 +435,13 @@
     document.head.appendChild(style);
   }
 
-  function askForConfirmation(message, title = 'space.bilibili.com显示') {
+  function showMessageDialog({
+    title = 'space.bilibili.com显示',
+    message,
+    confirmText = '确定',
+    cancelText = '',
+    allowBackdropClose = false,
+  }) {
     let overlay = document.getElementById(UI_ID.confirmOverlay);
 
     if (!overlay) {
@@ -461,6 +467,14 @@
 
     titleNode.textContent = title;
     bodyNode.textContent = message;
+    okBtn.textContent = confirmText;
+
+    if (cancelText) {
+      cancelBtn.style.display = '';
+      cancelBtn.textContent = cancelText;
+    } else {
+      cancelBtn.style.display = 'none';
+    }
 
     return new Promise((resolve) => {
       const cleanup = () => {
@@ -481,7 +495,7 @@
       };
 
       const onBackdrop = (event) => {
-        if (event.target === overlay) {
+        if (allowBackdropClose && event.target === overlay) {
           onCancel();
         }
       };
@@ -490,6 +504,24 @@
       okBtn.addEventListener('click', onConfirm);
       overlay.addEventListener('click', onBackdrop);
       overlay.classList.add('show');
+    });
+  }
+
+  function askForConfirmation(message, title = 'space.bilibili.com显示') {
+    return showMessageDialog({
+      title,
+      message,
+      confirmText: '继续',
+      cancelText: '取消',
+      allowBackdropClose: true,
+    });
+  }
+
+  function showExecutionReport(message, title = 'space.bilibili.com显示') {
+    return showMessageDialog({
+      title,
+      message,
+      confirmText: '我知道了',
     });
   }
 
@@ -582,11 +614,23 @@
       }
 
       setBusy(true);
-      statusNode.textContent = '任务执行中，请勿关闭页面...';
+      statusNode.textContent = '准备中 0%（0/0）';
 
       try {
-        await onStart({ folderNames, newFolderBaseName: baseName, targetFolderSize: targetCap });
-        statusNode.textContent = '任务已完成，请查看页面弹窗与控制台日志。';
+        await onStart({
+          folderNames,
+          newFolderBaseName: baseName,
+          targetFolderSize: targetCap,
+          onProgress: ({ phase, processed = 0, total = 0, detail = '' }) => {
+            const safeTotal = Number(total) > 0 ? Number(total) : 0;
+            const numericProcessed = Number(processed) || 0;
+            const safeProcessed = safeTotal > 0 ? Math.min(numericProcessed, safeTotal) : numericProcessed;
+            const percent = safeTotal > 0 ? Math.floor((safeProcessed / safeTotal) * 100) : 0;
+            const progressText = `${phase || '执行中'} ${percent}%（${safeProcessed}/${safeTotal}）`;
+            statusNode.textContent = detail ? `${progressText} ${detail}` : progressText;
+          },
+        });
+        statusNode.textContent = '任务已完成，请查看上方完成提示。';
       } catch (err) {
         statusNode.textContent = `执行失败：${err.message || err}`;
       } finally {
@@ -595,12 +639,13 @@
     });
   }
 
-  async function runSortTask({ folderNames, newFolderBaseName, targetFolderSize }) {
+  async function runSortTask({ folderNames, newFolderBaseName, targetFolderSize, onProgress = () => {} }) {
     log('开始执行');
 
     const mid = getMyMid();
     const csrf = getCsrf();
 
+    onProgress({ phase: '读取收藏夹', processed: 0, total: 1, detail: '正在获取收藏夹列表...' });
     const allFolders = await withRetry(() => fetchCreatedFolders(mid), '获取收藏夹列表');
     const { selected, missing } = pickFoldersByName(allFolders, folderNames);
 
@@ -614,12 +659,22 @@
 
     log('匹配收藏夹：', selected.map((f) => `${f.title}(${f.id})`).join(', '));
 
+    onProgress({ phase: '读取收藏夹', processed: 0, total: selected.length, detail: '开始读取源收藏夹内容...' });
+
+    let readFolderCount = 0;
     const collectTasks = selected.map(async (folder) => {
       const { medias, expectedCount } = await withRetry(
         () => fetchFolderResources(folder.id, folder.title),
         `读取收藏夹 ${folder.title}`,
       );
       log(`收藏夹「${folder.title}」读取完成：${medias.length}${Number.isFinite(expectedCount) ? `/${expectedCount}` : ''} 条`);
+      readFolderCount += 1;
+      onProgress({
+        phase: '读取收藏夹',
+        processed: readFolderCount,
+        total: selected.length,
+        detail: `已读取 ${folder.title}（${readFolderCount}/${selected.length}）`,
+      });
       return medias.map((media) => ({
         srcMediaId: folder.id,
         srcFolderTitle: folder.title,
@@ -652,13 +707,17 @@
     );
 
     if (!confirmed) {
-      alert('已取消执行。');
+      onProgress({ phase: '已取消', processed: 0, total: 0, detail: '任务已取消。' });
       return;
     }
 
     let success = 0;
     const failed = [];
     const createdFolders = [];
+    const totalToMove = items.length;
+    let movedCount = 0;
+
+    onProgress({ phase: '移动视频', processed: 0, total: totalToMove, detail: '开始移动视频...' });
 
     for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
       const chunk = chunks[chunkIndex];
@@ -686,6 +745,14 @@
           log(`✘ ${summary}`, err);
         }
 
+        movedCount += 1;
+        onProgress({
+          phase: '移动视频',
+          processed: movedCount,
+          total: totalToMove,
+          detail: `当前分组 ${chunkIndex + 1}/${chunks.length}`,
+        });
+
         await sleep(CONFIG.moveDelayMs);
       }
     }
@@ -693,7 +760,8 @@
     const folderText = createdFolders.map((f) => `${f.name}(id=${f.id}, ${f.total}条)`).join('；');
     const report = `完成：成功 ${success}/${items.length}，失败 ${failed.length}。新收藏夹：${folderText}`;
     log(report, failed);
-    alert(report);
+    onProgress({ phase: '执行完成', processed: totalToMove, total: totalToMove, detail: `失败 ${failed.length} 条` });
+    await showExecutionReport(report);
   }
 
   try {
