@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Bilibili 收藏夹按 UP 主数量自动整理
 // @namespace    https://github.com/
-// @version      1.4.0
-// @description  输入多个收藏夹名称，按 UP 主出现次数降序将视频移动到新建收藏夹
+// @version      1.5.0
+// @description  输入多个收藏夹名称，按 UP 主出现次数降序整理并自动去重后移动到新建收藏夹
 // @author       codex
 // @match        https://space.bilibili.com/*/favlist*
 // @grant        none
@@ -275,10 +275,41 @@
   }
 
   function parseFolderNames(rawInput) {
-    return rawInput
+    const names = rawInput
       .split(/[，,\n\r;；]+/)
       .map((s) => s.trim())
       .filter(Boolean);
+
+    const seen = new Set();
+    return names.filter((name) => {
+      const normalized = name.toLowerCase();
+      if (seen.has(normalized)) return false;
+      seen.add(normalized);
+      return true;
+    });
+  }
+
+  function dedupeItemsByVideo(items) {
+    const result = [];
+    const seen = new Set();
+
+    for (const item of items) {
+      const media = item?.media || {};
+      const key = String(media.bvid || media.id || '');
+      if (!key) {
+        result.push(item);
+        continue;
+      }
+
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(item);
+    }
+
+    return {
+      items: result,
+      removed: items.length - result.length,
+    };
   }
 
   function injectStyle() {
@@ -423,8 +454,8 @@
           </div>
           <div class="fav-sort-field">
             <label class="fav-sort-label">新收藏夹基础名称</label>
-            <input class="fav-sort-input" name="baseName" maxlength="10" value="${CONFIG.defaultNewFolderNamePrefix}" />
-            <div class="fav-sort-hint">默认不超过 10 字符，最终收藏夹名不超过 20 字符。</div>
+            <input class="fav-sort-input" name="baseName" maxlength="${CONFIG.maxFolderNameLength}" value="${CONFIG.defaultNewFolderNamePrefix}" />
+            <div class="fav-sort-hint">最终收藏夹名不超过 ${CONFIG.maxFolderNameLength} 字符（多分组会自动添加 -1、-2 后缀）。</div>
           </div>
           <div class="fav-sort-field">
             <label class="fav-sort-label">每个新收藏夹视频上限</label>
@@ -471,7 +502,10 @@
 
     startBtn.addEventListener('click', async () => {
       const folderNames = parseFolderNames(folderNamesField.value || '');
-      const baseName = truncateName((baseNameField.value || '').trim() || CONFIG.defaultNewFolderNamePrefix, 10);
+      const baseName = truncateName(
+        (baseNameField.value || '').trim() || CONFIG.defaultNewFolderNamePrefix,
+        CONFIG.maxFolderNameLength,
+      );
       const targetCap = Number(targetCapField.value || CONFIG.defaultTargetFolderSize);
 
       if (folderNames.length === 0) {
@@ -530,7 +564,12 @@
     });
 
     const nestedItems = await Promise.all(collectTasks);
-    const items = nestedItems.flat();
+    const allItems = nestedItems.flat();
+
+    const { items, removed } = dedupeItemsByVideo(allItems);
+    if (removed > 0) {
+      log(`检测到 ${removed} 条跨收藏夹重复视频，已自动去重，仅保留首个来源进行移动。`);
+    }
 
     if (items.length === 0) {
       throw new Error('所选收藏夹没有可移动的视频。');
@@ -547,6 +586,7 @@
 
     const confirmed = confirm(
       `即将把 ${items.length} 个视频移动到 ${chunks.length} 个新收藏夹。\n` +
+      (removed > 0 ? `已自动去重：${removed} 条重复视频。\n` : '') +
       `每个新收藏夹上限：${targetFolderSize}。\n` +
       `涉及 ${selected.length} 个源收藏夹、${groups.length} 位UP主。\n\n` +
       `${planSummary.join('\n')}\n\n继续吗？`,
