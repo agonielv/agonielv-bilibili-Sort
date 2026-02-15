@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili 收藏夹按 UP 主数量自动整理
 // @namespace    https://github.com/
-// @version      1.4.0
+// @version      1.5.0
 // @description  输入多个收藏夹名称，按 UP 主出现次数降序将视频移动到新建收藏夹
 // @author       codex
 // @match        https://space.bilibili.com/*/favlist*
@@ -25,6 +25,7 @@
   const UI_ID = {
     launcher: 'fav-sort-launcher',
     overlay: 'fav-sort-overlay',
+    confirmOverlay: 'fav-sort-confirm-overlay',
   };
 
   const log = (...args) => console.log('[FavSort]', ...args);
@@ -391,8 +392,105 @@
         font-size: 13px;
         color: #555;
       }
+      #${UI_ID.confirmOverlay} {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000000;
+        background: rgba(0, 0, 0, .5);
+      }
+      #${UI_ID.confirmOverlay}.show { display: flex; }
+      .fav-sort-confirm {
+        width: min(560px, calc(100vw - 32px));
+        border-radius: 14px;
+        background: #fff;
+        border: 1px solid #ececec;
+        box-shadow: 0 24px 64px rgba(0, 0, 0, .28);
+      }
+      .fav-sort-confirm-title {
+        font-size: 17px;
+        font-weight: 700;
+        color: #222;
+        margin: 0;
+        padding: 16px 18px;
+        border-bottom: 1px solid #f2f2f2;
+      }
+      .fav-sort-confirm-body {
+        margin: 0;
+        padding: 14px 18px;
+        font-size: 14px;
+        color: #333;
+        line-height: 1.7;
+        white-space: pre-wrap;
+      }
+      .fav-sort-confirm-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        padding: 0 18px 16px;
+      }
     `;
     document.head.appendChild(style);
+  }
+
+  function askForConfirmation(message, title = 'space.bilibili.com显示') {
+    let overlay = document.getElementById(UI_ID.confirmOverlay);
+
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = UI_ID.confirmOverlay;
+      overlay.innerHTML = `
+        <div class="fav-sort-confirm" role="dialog" aria-modal="true" aria-labelledby="fav-sort-confirm-title">
+          <h4 class="fav-sort-confirm-title" id="fav-sort-confirm-title"></h4>
+          <pre class="fav-sort-confirm-body"></pre>
+          <div class="fav-sort-confirm-actions">
+            <button class="fav-sort-btn fav-sort-btn-secondary" data-action="cancel" type="button">取消</button>
+            <button class="fav-sort-btn fav-sort-btn-primary" data-action="ok" type="button">继续</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+    }
+
+    const titleNode = overlay.querySelector('.fav-sort-confirm-title');
+    const bodyNode = overlay.querySelector('.fav-sort-confirm-body');
+    const cancelBtn = overlay.querySelector('[data-action="cancel"]');
+    const okBtn = overlay.querySelector('[data-action="ok"]');
+
+    titleNode.textContent = title;
+    bodyNode.textContent = message;
+
+    return new Promise((resolve) => {
+      const cleanup = () => {
+        overlay.classList.remove('show');
+        cancelBtn.removeEventListener('click', onCancel);
+        okBtn.removeEventListener('click', onConfirm);
+        overlay.removeEventListener('click', onBackdrop);
+      };
+
+      const onCancel = () => {
+        cleanup();
+        resolve(false);
+      };
+
+      const onConfirm = () => {
+        cleanup();
+        resolve(true);
+      };
+
+      const onBackdrop = (event) => {
+        if (event.target === overlay) {
+          onCancel();
+        }
+      };
+
+      cancelBtn.addEventListener('click', onCancel);
+      okBtn.addEventListener('click', onConfirm);
+      overlay.addEventListener('click', onBackdrop);
+      overlay.classList.add('show');
+    });
   }
 
   function createControlPanel(onStart) {
@@ -545,11 +643,12 @@
       return `分组${idx + 1}: ${chunk.total}个视频 / ${chunk.groups.length}位UP（${upStart} -> ${upEnd}）`;
     });
 
-    const confirmed = confirm(
+    const confirmed = await askForConfirmation(
       `即将把 ${items.length} 个视频移动到 ${chunks.length} 个新收藏夹。\n` +
       `每个新收藏夹上限：${targetFolderSize}。\n` +
-      `涉及 ${selected.length} 个源收藏夹、${groups.length} 位UP主。\n\n` +
-      `${planSummary.join('\n')}\n\n继续吗？`,
+      `涉及 ${selected.length} 个源收藏夹、${groups.length} 位UP主。\n` +
+      `${planSummary.join('\n')}\n` +
+      `继续吗？`,
     );
 
     if (!confirmed) {
