@@ -719,6 +719,8 @@
 
     if (!confirmed) {
       onProgress({ phase: '已取消', processed: 0, total: 0, detail: '任务已取消。' });
+      await showExecutionReport('已取消执行。为避免页面短时间展示异常，将自动刷新当前页面。');
+      location.reload();
       return;
     }
 
