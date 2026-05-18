@@ -417,6 +417,25 @@
         padding: 16px 18px;
         border-bottom: 1px solid #f2f2f2;
       }
+      .fav-sort-confirm-head {
+        padding: 14px 14px 14px 18px;
+        border-bottom: 1px solid #f2f2f2;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .fav-sort-confirm-head .fav-sort-confirm-title {
+        border: none;
+        padding: 0;
+      }
+      .fav-sort-confirm-close {
+        border: none;
+        background: #f5f5f5;
+        border-radius: 10px;
+        width: 32px;
+        height: 32px;
+        cursor: pointer;
+      }
       .fav-sort-confirm-body {
         margin: 0;
         padding: 14px 18px;
@@ -440,7 +459,6 @@
     message,
     confirmText = '确定',
     cancelText = '',
-    allowBackdropClose = false,
   }) {
     let overlay = document.getElementById(UI_ID.confirmOverlay);
 
@@ -449,10 +467,13 @@
       overlay.id = UI_ID.confirmOverlay;
       overlay.innerHTML = `
         <div class="fav-sort-confirm" role="dialog" aria-modal="true" aria-labelledby="fav-sort-confirm-title">
-          <h4 class="fav-sort-confirm-title" id="fav-sort-confirm-title"></h4>
+          <div class="fav-sort-confirm-head">
+            <h4 class="fav-sort-confirm-title" id="fav-sort-confirm-title"></h4>
+            <button class="fav-sort-confirm-close" data-action="close" type="button" title="关闭">✕</button>
+          </div>
           <pre class="fav-sort-confirm-body"></pre>
           <div class="fav-sort-confirm-actions">
-            <button class="fav-sort-btn fav-sort-btn-secondary" data-action="cancel" type="button">取消</button>
+            <button class="fav-sort-btn fav-sort-btn-secondary" data-action="cancel" type="button">关闭</button>
             <button class="fav-sort-btn fav-sort-btn-primary" data-action="ok" type="button">继续</button>
           </div>
         </div>
@@ -464,6 +485,7 @@
     const bodyNode = overlay.querySelector('.fav-sort-confirm-body');
     const cancelBtn = overlay.querySelector('[data-action="cancel"]');
     const okBtn = overlay.querySelector('[data-action="ok"]');
+    const closeBtn = overlay.querySelector('[data-action="close"]');
 
     titleNode.textContent = title;
     bodyNode.textContent = message;
@@ -481,7 +503,7 @@
         overlay.classList.remove('show');
         cancelBtn.removeEventListener('click', onCancel);
         okBtn.removeEventListener('click', onConfirm);
-        overlay.removeEventListener('click', onBackdrop);
+        closeBtn.removeEventListener('click', onCancel);
       };
 
       const onCancel = () => {
@@ -494,15 +516,9 @@
         resolve(true);
       };
 
-      const onBackdrop = (event) => {
-        if (allowBackdropClose && event.target === overlay) {
-          onCancel();
-        }
-      };
-
       cancelBtn.addEventListener('click', onCancel);
       okBtn.addEventListener('click', onConfirm);
-      overlay.addEventListener('click', onBackdrop);
+      closeBtn.addEventListener('click', onCancel);
       overlay.classList.add('show');
     });
   }
@@ -512,8 +528,7 @@
       title,
       message,
       confirmText: '继续',
-      cancelText: '取消',
-      allowBackdropClose: true,
+      cancelText: '关闭',
     });
   }
 
@@ -595,10 +610,6 @@
     launcher.addEventListener('click', show);
     closeBtn.addEventListener('click', hide);
     cancelBtn.addEventListener('click', hide);
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) hide();
-    });
-
     startBtn.addEventListener('click', async () => {
       const folderNames = parseFolderNames(folderNamesField.value || '');
       const baseName = truncateName((baseNameField.value || '').trim() || CONFIG.defaultNewFolderNamePrefix, 10);
